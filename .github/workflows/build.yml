@@ -22,12 +22,11 @@ jobs:
         vcpkg integrate install
 
     - name: Build Solution
-      working-directory: ./csgo_internal
-      run: msbuild csgo_internal.sln /p:Configuration=Release /p:Platform=x86 /m /v:m
+      run: msbuild csgo/csgo_internal/csgo_internal.sln /p:Configuration=Release /p:Platform=x86 /m /v:m
 
     - name: Upload DLL
       uses: actions/upload-artifact@v4
       with:
         name: Weave-CSGO-DLL
-        path: ./csgo_internal/Release/*.dll
+        path: csgo/csgo_internal/Release/*.dll
         if-no-files-found: error

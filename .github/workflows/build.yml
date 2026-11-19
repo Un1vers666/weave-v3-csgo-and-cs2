@@ -3,31 +3,81 @@ name: Build Weave Internal
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
 
-    - name: Install vcpkg dependencies
-      run: |
-        vcpkg install freetype:x86-windows-static
-        vcpkg integrate install
+      - name: Install DirectX SDK (June 2010)
+        shell: pwsh
+        run: |
+          $url = "https://download.microsoft.com/download/A/E/7/AE743F1F-632B-4809-87A9-AA1BB3458E31/DXSDK_Jun10.exe"
+          $installer = "$env:TEMP\DXSDK_Jun10.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "/U /Q" -Wait
+          if (-not (Test-Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)\Include")) {
+            Write-Warning "DirectX SDK June 2010 path not found after silent install."
+          }
 
-    - name: Build Solution
-      working-directory: ./csgo
-      run: msbuild csgo_internal.sln /p:Configuration=Release /p:Platform=x86 /m /v:m
+      - name: Install vcpkg dependencies
+        run: |
+          vcpkg install freetype:x86-windows-static
+          vcpkg integrate install
 
-    - name: Upload DLL
-      uses: actions/upload-artifact@v4
-      with:
-        name: Weave-CSGO-DLL
-        path: ./csgo/csgo_internal/Release/*.dll
-        if-no-files-found: error
+      - name: Detect latest Windows 10 SDK
+        id: sdk
+        shell: pwsh
+        run: |
+          $kitsRoot = "C:\Program Files (x86)\Windows Kits\10\Include"
+          $latestSdk = Get-ChildItem -Path $kitsRoot -Directory |
+            Where-Object { $_.Name -match '^10\.0\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            Select-Object -First 1 -ExpandProperty Name
+
+          if (-not $latestSdk) {
+            throw "No Windows 10 SDK found in $kitsRoot"
+          }
+
+          Write-Host "Using WindowsTargetPlatformVersion: $latestSdk"
+          "version=$latestSdk" >> $env:GITHUB_OUTPUT
+
+      - name: Build Solution
+        working-directory: ./csgo
+        run: |
+          msbuild csgo_internal.sln ^
+            /p:Configuration=Release ^
+            /p:Platform=x86 ^
+            /p:WindowsTargetPlatformVersion=${{ steps.sdk.outputs.version }} ^
+            /m /v:m
+
+      - name: Locate built DLLs
+        id: dll
+        shell: pwsh
+        run: |
+          $found = Get-ChildItem -Path ".\csgo" -Filter "*.dll" -Recurse |
+            Where-Object { $_.FullName -match '\\Release\\' }
+
+          if (-not $found) {
+            Write-Host "All DLLs in workspace:"
+            Get-ChildItem -Path "." -Filter "*.dll" -Recurse | Select-Object -ExpandProperty FullName
+            throw "No Release DLL found after build."
+          }
+
+          $found | ForEach-Object { Write-Host "Found DLL: $($_.FullName)" }
+          $firstDir = Split-Path -Parent $found[0].FullName
+          "dir=$firstDir" >> $env:GITHUB_OUTPUT
+
+      - name: Upload DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: Weave-CSGO-DLL
+          path: ${{ steps.dll.outputs.dir }}/*.dll
+          if-no-files-found: error

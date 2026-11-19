@@ -1,4 +1,4 @@
-name: Build Weave Internal
+[19.11.2026 14:49] Un1vers: name: Build Weave Internal
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -15,6 +16,15 @@ jobs:
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            ${{ runner.tool_cache }}\vcpkg
+            $env:LOCALAPPDATA\vcpkg
+          key: ${{ runner.os }}-vcpkg-freetype-x86-windows-static
 
       - name: Install DirectX SDK (June 2010)
         shell: pwsh
@@ -29,6 +39,164 @@ jobs:
         run: |
           vcpkg install freetype:x86-windows-static
           vcpkg integrate install
+
+      - name: Patch source compatibility & missing headers
+        id: patch
+        shell: pwsh
+        run: |
+          $shimDir = Join-Path $env:RUNNER_TEMP "weave_shims"
+          New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+
+          function Ensure-Include($filePath, $header) {
+            if (-not (Test-Path $filePath)) { return }
+            $content = Get-Content -Path $filePath -Raw
+            if ($content -notmatch [regex]::Escape("#include <$header>")) {
+              $updated = "#include <$header>rn" + $content
+              Set-Content -Path $filePath -Value $updated -NoNewline
+              Write-Host "Added #include <$header> to $filePath"
+            }
+          }
+
+          Ensure-Include "csgo/csgo_internal/src/render.hpp" "mutex"
+          Ensure-Include "csgo/csgo_internal/src/features/visuals/hitmarker.hpp" "mutex"
+          Ensure-Include "csgo/csgo_internal/src/utils/math.cpp" "mutex"
+
+          $controlsPath = "csgo/csgo_internal/deps/weave-gui/controls/controls.cpp"
+          if (Test-Path $controlsPath) {
+            $lines = Get-Content -Path $controlsPath
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match 'std::make_format_args\(([^)]+)\)') {
+                $arg = $matches[1].Trim()
+                if ($arg -notmatch '^[a-zA-Z_][a-zA-Z0-9_]*$') {
+                  $varName = "weave_fmt_arg_$i"
+                  $indent = ($lines[$i] -match '^(\s*)') ? $matches[1] : ""
+                  $decl = "${indent}auto $varName = $arg;"
+                  $lines[$i] = $lines[$i] -replace 'std::make_format_args\(([^)]+)\)', "std::make_format_args($varName)"
+                  $lines = $lines[0..($i-1)] + @($decl) + $lines[$i..($lines.Count-1)]
+                  $i++
+                  Write-Host "Patched make_format_args around line $i in controls.cpp"
+                }
+              }
+            }
+            Set-Content -Path $controlsPath -Value ($lines -join "rn") -NoNewline
+          }
+
+          $hasDiscord = Get-ChildItem -Path "csgo" -Filter "discord_register.h" -Recurse -ErrorAction SilentlyContinue
+          if (-not $hasDiscord) {
+            @'
+#pragma once
+#include <stdint.h>
+typedef struct DiscordUser {
+    const char* userId;
+    const char* username;
+    const char* discriminator;
+    const char* avatar;
+} DiscordUser;
+typedef struct DiscordEventHandlers {
+    void (*ready)(const DiscordUser* request);
+    void (*disconnected)(int errorCode, const char* message);
+    void (*errored)(int errorCode, const char* message);
+    void (*joinGame)(const char* joinSecret);
+    void (*spectateGame)(const char* spectateSecret);
+[19.11.2026 14:49] Un1vers: void (*joinRequest)(const DiscordUser* request);
+} DiscordEventHandlers;
+typedef struct DiscordRichPresence {
+    const char* state;
+    const char* details;
+    int64_t startTimestamp;
+    int64_t endTimestamp;
+    const char* largeImageKey;
+    const char* largeImageText;
+    const char* smallImageKey;
+    const char* smallImageText;
+    const char* partyId;
+    int partySize;
+    int partyMax;
+    const char* matchSecret;
+    const char* joinSecret;
+    const char* spectateSecret;
+    int8_t instance;
+} DiscordRichPresence;
+extern "C" {
+    inline void Discord_Initialize(const char*, DiscordEventHandlers*, int, const char*) {}
+    inline void Discord_Shutdown(void) {}
+    inline void Discord_RunCallbacks(void) {}
+    inline void Discord_UpdatePresence(const DiscordRichPresence*) {}
+    inline void Discord_ClearPresence(void) {}
+}
+'@ | Set-Content -Path (Join-Path $shimDir "discord_register.h")
+            Write-Host "Created shim discord_register.h"
+          }
+
+          $hasLua = Get-ChildItem -Path "csgo" -Filter "lua.hpp" -Recurse -ErrorAction SilentlyContinue
+          if (-not $hasLua) {
+            @'
+#pragma once
+#include <cstddef>
+#include <string>
+struct lua_State;
+typedef int (*lua_CFunction)(lua_State* L);
+typedef double lua_Number;
+typedef ptrdiff_t lua_Integer;
+#define LUA_REGISTRYINDEX (-10000)
+#define LUA_GLOBALSINDEX  (-10002)
+#define LUA_TNONE (-1)
+#define LUA_TNIL 0
+#define LUA_TBOOLEAN 1
+#define LUA_TLIGHTUSERDATA 2
+#define LUA_TNUMBER 3
+#define LUA_TSTRING 4
+#define LUA_TTABLE 5
+#define LUA_TFUNCTION 6
+#define LUA_TUSERDATA 7
+#define LUA_TTHREAD 8
+#define LUA_MULTRET (-1)
+inline lua_State* luaL_newstate() { return nullptr; }
+inline void lua_close(lua_State*) {}
+inline void luaL_openlibs(lua_State*) {}
+inline int luaL_loadstring(lua_State*, const char*) { return 1; }
+inline int luaL_loadfile(lua_State*, const char*) { return 1; }
+inline int lua_pcall(lua_State*, int, int, int) { return 1; }
+inline void lua_settop(lua_State*, int) {}
+inline int lua_gettop(lua_State*) { return 0; }
+inline void lua_pushnil(lua_State*) {}
+inline void lua_pushboolean(lua_State*, int) {}
+inline void lua_pushnumber(lua_State*, lua_Number) {}
+inline void lua_pushinteger(lua_State*, lua_Integer) {}
+inline void lua_pushstring(lua_State*, const char*) {}
+inline void lua_pushcclosure(lua_State*, lua_CFunction, int) {}
+inline void lua_pushvalue(lua_State*, int) {}
+inline void lua_remove(lua_State*, int) {}
+inline void lua_insert(lua_State*, int) {}
+inline void lua_replace(lua_State*, int) {}
+inline int lua_type(lua_State*, int) { return LUA_TNIL; }
+inline int lua_isstring(lua_State*, int) { return 0; }
+inline int lua_isnumber(lua_State*, int) { return 0; }
+inline int lua_istable(lua_State*, int) { return 0; }
+inline int lua_isfunction(lua_State*, int) { return 0; }
+inline lua_Number lua_tonumber(lua_State*, int) { return 0.0; }
+inline lua_Integer lua_tointeger(lua_State*, int) { return 0; }
+inline int lua_toboolean(lua_State*, int) { return 0; }
+inline const char* lua_tolstring(lua_State*, int, size_t* len) { if (len) *len = 0; return ""; }
+inline void* lua_touserdata(lua_State*, int) { return nullptr; }
+inline void lua_getfield(lua_State*, int, const char*) {}
+inline void lua_setfield(lua_State*, int, const char*) {}
+inline void lua_rawgeti(lua_State*, int, int) {}
+inline void lua_rawseti(lua_State*, int, int) {}
+inline void lua_createtable(lua_State*, int, int) {}
+inline void lua_newtable(lua_State*) {}
+inline int lua_next(lua_State*, int) { return 0; }
+inline int luaL_ref(lua_State*, int) { return 0; }
+inline void luaL_unref(lua_State*, int, int) {}
+inline int luaL_error(lua_State*, const char*, ...) { return 0; }
+inline const char* lua_tostring(lua_State* L, int idx) { return lua_tolstring(L, idx, nullptr); }
+inline void lua_register(lua_State* L, const char* n, lua_CFunction f) { lua_pushcclosure(L, f, 0); lua_setfield(L, LUA_GLOBALSINDEX, n); }
+[19.11.2026 14:49] Un1vers: inline void lua_pop(lua_State* L, int n) { lua_settop(L, -n - 1); }
+'@ | Set-Content -Path (Join-Path $shimDir "lua.hpp")
+            Write-Host "Created shim lua.hpp"
+          }
+
+          "shim_dir=$shimDir" >> $env:GITHUB_OUTPUT
 
       - name: Detect latest Windows 10 SDK
         id: sdk
@@ -51,11 +219,13 @@ jobs:
         working-directory: ./csgo
         shell: pwsh
         run: |
+          $shim = "${{ steps.patch.outputs.shim_dir }}"
           $args = @(
             "csgo_internal.sln",
             "/p:Configuration=Release",
             "/p:Platform=x86",
             "/p:WindowsTargetPlatformVersion=${{ steps.sdk.outputs.version }}",
+            "/p:ExternalIncludePath=$shim",
             "/m",
             "/v:m"
           )

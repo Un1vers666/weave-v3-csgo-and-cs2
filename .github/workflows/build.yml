@@ -1,4 +1,4 @@
-[19.11.2026 14:49] Un1vers: name: Build Weave Internal
+name: Build Weave Internal
 
 on:
   push:

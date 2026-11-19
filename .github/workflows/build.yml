@@ -22,10 +22,8 @@ jobs:
           $url = "https://download.microsoft.com/download/A/E/7/AE743F1F-632B-4809-87A9-AA1BB3458E31/DXSDK_Jun10.exe"
           $installer = "$env:TEMP\DXSDK_Jun10.exe"
           Invoke-WebRequest -Uri $url -OutFile $installer
-          Start-Process -FilePath $installer -ArgumentList "/U /Q" -Wait
-          if (-not (Test-Path "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)\Include")) {
-            Write-Warning "DirectX SDK June 2010 path not found after silent install."
-          }
+          $proc = Start-Process -FilePath $installer -ArgumentList "/U /Q" -Wait -PassThru
+          Write-Host "DXSDK installer exit code: $($proc.ExitCode)"
 
       - name: Install vcpkg dependencies
         run: |
@@ -51,12 +49,20 @@ jobs:
 
       - name: Build Solution
         working-directory: ./csgo
+        shell: pwsh
         run: |
-          msbuild csgo_internal.sln ^
-            /p:Configuration=Release ^
-            /p:Platform=x86 ^
-            /p:WindowsTargetPlatformVersion=${{ steps.sdk.outputs.version }} ^
-            /m /v:m
+          $args = @(
+            "csgo_internal.sln",
+            "/p:Configuration=Release",
+            "/p:Platform=x86",
+            "/p:WindowsTargetPlatformVersion=${{ steps.sdk.outputs.version }}",
+            "/m",
+            "/v:m"
+          )
+          & msbuild @args
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Locate built DLLs
         id: dll

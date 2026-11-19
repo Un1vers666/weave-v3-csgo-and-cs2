@@ -51,7 +51,7 @@ jobs:
             if (-not (Test-Path $filePath)) { return }
             $content = Get-Content -Path $filePath -Raw
             if ($content -notmatch [regex]::Escape("#include <$header>")) {
-              $updated = "#include <$header>rn" + $content
+              $updated = "#include <$header>`r`n" + $content
               Set-Content -Path $filePath -Value $updated -NoNewline
               Write-Host "Added #include <$header> to $filePath"
             }
@@ -78,7 +78,7 @@ jobs:
                 }
               }
             }
-            Set-Content -Path $controlsPath -Value ($lines -join "rn") -NoNewline
+            Set-Content -Path $controlsPath -Value ($lines -join "`r`n") -NoNewline
           }
 
           $hasDiscord = Get-ChildItem -Path "csgo" -Filter "discord_register.h" -Recurse -ErrorAction SilentlyContinue
@@ -98,7 +98,7 @@ typedef struct DiscordEventHandlers {
     void (*errored)(int errorCode, const char* message);
     void (*joinGame)(const char* joinSecret);
     void (*spectateGame)(const char* spectateSecret);
-[19.11.2026 14:49] Un1vers: void (*joinRequest)(const DiscordUser* request);
+    void (*joinRequest)(const DiscordUser* request);
 } DiscordEventHandlers;
 typedef struct DiscordRichPresence {
     const char* state;
@@ -191,7 +191,7 @@ inline void luaL_unref(lua_State*, int, int) {}
 inline int luaL_error(lua_State*, const char*, ...) { return 0; }
 inline const char* lua_tostring(lua_State* L, int idx) { return lua_tolstring(L, idx, nullptr); }
 inline void lua_register(lua_State* L, const char* n, lua_CFunction f) { lua_pushcclosure(L, f, 0); lua_setfield(L, LUA_GLOBALSINDEX, n); }
-[19.11.2026 14:49] Un1vers: inline void lua_pop(lua_State* L, int n) { lua_settop(L, -n - 1); }
+inline void lua_pop(lua_State* L, int n) { lua_settop(L, -n - 1); }
 '@ | Set-Content -Path (Join-Path $shimDir "lua.hpp")
             Write-Host "Created shim lua.hpp"
           }
